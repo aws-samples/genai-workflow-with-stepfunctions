@@ -1,0 +1,244 @@
+{
+    "Comment": "Use generative AI to process a list of records",
+    "StartAt": "Get parameters",
+    "States": {
+        "Get parameters": {
+            "Type": "Task",
+            "Next": "Get record Ids",
+            "Parameters": {
+                "Name": "${QUERY_PARAMETER_NAME}"
+            },
+            "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+            "ResultSelector": {
+                "Parameters.$": "States.StringToJson($.Parameter.Value)"
+            }
+        },
+        "Get record Ids": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+            "Parameters": {
+                "QueryExecutionContext": {
+                    "Catalog": "AwsDataCatalog",
+                    "Database.$": "$.Parameters.Database"
+                },
+                "QueryString.$": "States.Format($.Parameters.GetRecordIdsQuery, $$.Execution.Input.LastUpdatedTime)",
+                "WorkGroup.$": "$.Parameters.WorkGroup"
+            },
+            "Next": "Get record Ids from query result",
+            "ResultPath": "$.Output"
+        },
+        "Get record Ids from query result": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::athena:getQueryResults",
+            "Parameters": {
+                "MaxResults.$": "$.Parameters.MaxResultsPerRequest",
+                "QueryExecutionId.$": "$.Output.QueryExecution.QueryExecutionId"
+            },
+            "Next": "Process each record",
+            "ResultPath": "$.QueryResult",
+            "ResultSelector": {
+                "Rows.$": "$.ResultSet.Rows[1:]",
+                "Response.$": "$"
+            }
+        },
+        "Process each record": {
+            "Type": "Map",
+            "ItemProcessor": {
+                "ProcessorConfig": {
+                    "Mode": "DISTRIBUTED",
+                    "ExecutionType": "STANDARD"
+                },
+                "StartAt": "Get record",
+                "States": {
+                    "Get record": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+                        "Parameters": {
+                            "QueryExecutionContext": {
+                                "Catalog": "AwsDataCatalog",
+                                "Database.$": "$.Database"
+                            },
+                            "QueryString.$": "States.Format($.GetRecordQuery, $.RecordId)",
+                            "WorkGroup.$": "$.WorkGroup"
+                        },
+                        "Next": "Get record from query result"
+                    },
+                    "Get record from query result": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::athena:getQueryResults",
+                        "Parameters": {
+                            "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+                        },
+                        "ResultSelector": {
+                            "Rows.$": "$.ResultSet.Rows",
+                            "NumberOfRows.$": "States.ArrayLength($.ResultSet.Rows[1:])"
+                        },
+                        "Next": "Has data?"
+                    },
+                    "Has data?": {
+                        "Type": "Choice",
+                        "Choices": [
+                            {
+                                "Variable": "$.NumberOfRows",
+                                "NumericGreaterThan": 0,
+                                "Next": "Format record"
+                            }
+                        ],
+                        "Default": "No data found"
+                    },
+                    "No data found": {
+                        "Type": "Pass",
+                        "End": true
+                    },
+                    "Format record": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::lambda:invoke",
+                        "Parameters": {
+                            "Payload.$": "$",
+                            "FunctionName": "${FORMAT_RECORD_FUNCTION}"
+                        },
+                        "Retry": [
+                            {
+                                "ErrorEquals": [
+                                    "Lambda.ServiceException",
+                                    "Lambda.AWSLambdaException",
+                                    "Lambda.SdkClientException",
+                                    "Lambda.TooManyRequestsException"
+                                ],
+                                "IntervalSeconds": 1,
+                                "MaxAttempts": 3,
+                                "BackoffRate": 2
+                            }
+                        ],
+                        "ResultPath": "$.record",
+                        "Next": "Get prompt"
+                    },
+                    "Get prompt": {
+                        "Type": "Task",
+                        "Parameters": {
+                            "Name": "${PROMPT_TEMPLATE_PARAMETER_NAME}"
+                        },
+                        "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+                        "ResultPath": "$.prompt",
+                        "Next": "Call generative AI"
+                    },
+                    "Call generative AI": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::bedrock:invokeModel",
+                        "Parameters": {
+                            "ModelId": "${BEDROCK_MODEL_ID}",
+                            "Body": {
+                                "anthropic_version": "bedrock-2023-05-31",
+                                "max_tokens": 512,
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {
+                                                "type": "text",
+                                                "text.$": "States.Format($.prompt.Parameter.Value, $.record.Payload)"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        },
+                        "ResultSelector": {
+                            "recordId.$": "$$.Execution.Input.RecordId",
+                            "updatedTime.$": "$$.State.EnteredTime",
+                            "modelResponse.$": "$.Body"
+                        },
+                        "Retry": [
+                            {
+                                "ErrorEquals": [
+                                    "Bedrock.InternalServerException",
+                                    "Bedrock.ModelTimeoutException",
+                                    "Bedrock.ServiceQuotaExceededException",
+                                    "Bedrock.ThrottlingException"
+                                ],
+                                "BackoffRate": 2,
+                                "IntervalSeconds": 30,
+                                "MaxAttempts": 10,
+                                "JitterStrategy": "FULL"
+                            }
+                        ],
+                        "Next": "Process generative AI output"
+                    },
+                    "Process generative AI output": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::lambda:invoke",
+                        "Parameters": {
+                            "Payload.$": "$",
+                            "FunctionName": "${PROCESS_GEN_AI_OUTPUT_FUNCTION}"
+                        },
+                        "Retry": [
+                            {
+                                "ErrorEquals": [
+                                    "Lambda.ServiceException",
+                                    "Lambda.AWSLambdaException",
+                                    "Lambda.SdkClientException",
+                                    "Lambda.TooManyRequestsException"
+                                ],
+                                "IntervalSeconds": 1,
+                                "MaxAttempts": 3,
+                                "BackoffRate": 2
+                            }
+                        ],
+                        "OutputPath": "$.Payload",
+                        "Next": "Save results"
+                    },
+                    "Save results": {
+                        "Type": "Task",
+                        "Resource": "arn:aws:states:::dynamodb:putItem",
+                        "Parameters": {
+                            "TableName": "${RESULTS_TABLE_NAME}",
+                            "Item.$": "$"
+                        },
+                        "End": true
+                    }
+                }
+            },
+            "Next": "Has more results?",
+            "Label": "Processeachrecord",
+            "MaxConcurrency": 10,
+            "ResultPath": null,
+            "ItemsPath": "$.QueryResult.Rows",
+            "ItemSelector": {
+                "RecordId.$": "$$.Map.Item.Value.Data[0].VarCharValue",
+                "WorkGroup.$": "$.Parameters.WorkGroup",
+                "Database.$": "$.Parameters.Database",
+                "GetRecordQuery.$": "$.Parameters.GetRecordQuery"
+            }
+        },
+        "Has more results?": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.QueryResult.Response.NextToken",
+                    "IsPresent": true,
+                    "Next": "Get record Ids with NextToken",
+                    "Comment": "has NextToken"
+                }
+            ],
+            "Default": "Success"
+        },
+        "Get record Ids with NextToken": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::athena:getQueryResults",
+            "Parameters": {
+                "MaxResults.$": "$.Parameters.MaxResultsPerRequest",
+                "NextToken.$": "$.QueryResult.Response.NextToken",
+                "QueryExecutionId.$": "$.Output.QueryExecution.QueryExecutionId"
+            },
+            "ResultPath": "$.QueryResult",
+            "Next": "Process each record",
+            "ResultSelector": {
+                "Rows.$": "$.ResultSet.Rows",
+                "Response.$": "$"
+            }
+        },
+        "Success": {
+            "Type": "Succeed"
+        }
+    }
+}

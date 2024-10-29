@@ -1,0 +1,14 @@
+Your task is to create a consise summary from the provided patient report.
+
+Read through the entire patient report carefully.
+<report>
+{}
+</report>
+
+Create a summary in the following JSON format:
+
+<output>
+\{
+    "summary": "patient report summary"
+\}
+</output>

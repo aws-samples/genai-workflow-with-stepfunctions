@@ -1,0 +1,27 @@
+{
+    "project_tag_key": "Project",
+    "project_tag_value": "GenAI-Workflow-Orchestrator",
+    "environment_tag_key": "Environment",
+    "environment_tag_value": "Development",
+    "athena_workgroup_name": "genai-workflow-orchestrator",
+    "gen_ai_workflow_state_machine_name": "GenAIWorkflow",
+    "query_parameter_name": "/genai-workflow-orchestrator/query-parameters",
+    "query_parameter": {
+        "Database": "healthlake",
+        "WorkGroup": "genai-workflow-orchestrator",
+        "MaxResultsPerRequest": 100,
+        "GetRecordIdsQuery": "SELECT DISTINCT id FROM documentreference WHERE meta.lastUpdated > \\'{}\\' limit 5;",
+        "GetRecordQuery": "SELECT from_utf8(from_base64(content[1].attachment.data)) as report FROM documentreference WHERE id = \\'{}\\';"
+    },
+    "prompt_template_parameter_name": "/genai-workflow-orchestrator/prompt-template",
+    "bedrock_model_id": "arn:aws:bedrock:<REGION>::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "bedrock_inference_profile_id": "us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+    "use_inference_profile": false,
+    "process_gen_ai_output_function_name": "genai-workflow-orchestrator-process-gen-ai-output",
+    "format_record_function_name": "genai-workflow-orchestrator-format-record",
+    "results_table_name": "genai-workflow-orchestrator-results",
+    "healthlake_data_store_name": "gen_ai_orchestrator_datastore",
+    "kms_alias_stepfunctions_key": "genai-workflow-stepfunctions-key",
+    "kms_alias_cloudwatch_key": "genai-workflow-cloudwatch-key",
+    "kms_alias_s3_key": "genai-workflow-s3-key"
+}
