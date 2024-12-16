@@ -36,14 +36,29 @@
         "Get record Ids from query result": {
             "Type": "Task",
             "Resource": "arn:aws:states:::athena:getQueryResults",
-            "Next": "Process each record",
+            "Next": "Has results?",
             "Arguments": {
                 "MaxResults": "{% $AthenaParameters.MaxResultsPerRequest %}",
                 "QueryExecutionId": "{% $states.input.QueryExecutionId %}"
             },
             "Output": {
-                "Rows": "{% $count($states.result.ResultSet.Rows) > 2 ? $states.result.ResultSet.Rows#$i[$i>0] : $count($states.result.ResultSet.Rows) = 2 ? [$states.result.ResultSet.Rows[1]] : [] %}"
+                "Rows": "{% $states.result.ResultSet.Rows %}"
             }
+        },
+        "Has results?": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Next": "Process each record",
+                    "Comment": "Results found",
+                    "Output": {
+                        "Rows": "{% $count($states.input.Rows) > 2 ? $states.input.Rows#$i[$i>0] : [$states.input.Rows[1]] %}"
+                    },
+                    "Condition": "{% $count($states.input.Rows) > 1 %}"
+                }
+            ],
+            "Default": "Success",
+            "Comment": "Has results to process"
         },
         "Process each record": {
             "Type": "Map",
