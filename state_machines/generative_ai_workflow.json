@@ -1,44 +1,48 @@
 {
     "Comment": "Use generative AI to process a list of records",
     "StartAt": "Get parameters",
+    "QueryLanguage": "JSONata",
     "States": {
         "Get parameters": {
             "Type": "Task",
             "Next": "Get record Ids",
-            "Parameters": {
+            "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+            "Arguments": {
                 "Name": "${QUERY_PARAMETER_NAME}"
             },
-            "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
-            "ResultSelector": {
-                "Parameters.$": "States.StringToJson($.Parameter.Value)"
+            "Output": {
+                "lastUpdatedTime": "{% $states.input.LastUpdatedTime %}"
+            },
+            "Assign": {
+                "AthenaParameters": "{% $parse($states.result.Parameter.Value) %}"
             }
         },
         "Get record Ids": {
             "Type": "Task",
             "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
-            "Parameters": {
+            "Next": "Get record Ids from query result",
+            "Arguments": {
                 "QueryExecutionContext": {
                     "Catalog": "AwsDataCatalog",
-                    "Database.$": "$.Parameters.Database"
+                    "Database": "{% $AthenaParameters.Database %}"
                 },
-                "QueryString.$": "States.Format($.Parameters.GetRecordIdsQuery, $$.Execution.Input.LastUpdatedTime)",
-                "WorkGroup.$": "$.Parameters.WorkGroup"
+                "QueryString": "{% $replace($AthenaParameters.GetRecordIdsQuery, '{}', $states.input.lastUpdatedTime) %}",
+                "WorkGroup": "{% $AthenaParameters.WorkGroup %}"
             },
-            "Next": "Get record Ids from query result",
-            "ResultPath": "$.Output"
+            "Output": {
+                "QueryExecutionId": "{% $states.result.QueryExecution.QueryExecutionId %}"
+            }
         },
         "Get record Ids from query result": {
             "Type": "Task",
             "Resource": "arn:aws:states:::athena:getQueryResults",
-            "Parameters": {
-                "MaxResults.$": "$.Parameters.MaxResultsPerRequest",
-                "QueryExecutionId.$": "$.Output.QueryExecution.QueryExecutionId"
-            },
             "Next": "Process each record",
-            "ResultPath": "$.QueryResult",
-            "ResultSelector": {
-                "Rows.$": "$.ResultSet.Rows[1:]",
-                "Response.$": "$"
+            "Arguments": {
+                "MaxResults": "{% $AthenaParameters.MaxResultsPerRequest %}",
+                "QueryExecutionId": "{% $states.input.QueryExecutionId %}"
+            },
+            "Output": {
+                "Rows": "{% $count($states.result.ResultSet.Rows) > 2 ? $states.result.ResultSet.Rows#$i[$i>0] : $count($states.result.ResultSet.Rows) = 2 ? [$states.result.ResultSet.Rows[1]] : [] %}"
             }
         },
         "Process each record": {
@@ -53,38 +57,43 @@
                     "Get record": {
                         "Type": "Task",
                         "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
-                        "Parameters": {
+                        "Arguments": {
                             "QueryExecutionContext": {
                                 "Catalog": "AwsDataCatalog",
-                                "Database.$": "$.Database"
+                                "Database": "{% $states.input.AthenaParameters.Database %}"
                             },
-                            "QueryString.$": "States.Format($.GetRecordQuery, $.RecordId)",
-                            "WorkGroup.$": "$.WorkGroup"
+                            "QueryString": "{% $replace($states.input.AthenaParameters.GetRecordQuery, '{}', $states.input.Record) %}",
+                            "WorkGroup": "{% $states.input.AthenaParameters.WorkGroup %}"
                         },
-                        "Next": "Get record from query result"
+                        "Output": {
+                            "QueryExecutionId": "{% $states.result.QueryExecution.QueryExecutionId %}"
+                        },
+                        "Next": "Get record from query result",
+                        "Assign": {
+                            "RecordId": "{% $states.input.Record %}"
+                        }
                     },
                     "Get record from query result": {
                         "Type": "Task",
                         "Resource": "arn:aws:states:::athena:getQueryResults",
-                        "Parameters": {
-                            "QueryExecutionId.$": "$.QueryExecution.QueryExecutionId"
+                        "Arguments": {
+                            "QueryExecutionId": "{% $states.input.QueryExecutionId %}"
                         },
-                        "ResultSelector": {
-                            "Rows.$": "$.ResultSet.Rows",
-                            "NumberOfRows.$": "States.ArrayLength($.ResultSet.Rows[1:])"
+                        "Output": {
+                            "Rows": "{% $states.result.ResultSet.Rows %}",
+                            "NumberOfRows": "{% $count($states.result.ResultSet.Rows#$i[$i>0]) %}"
                         },
                         "Next": "Has data?"
                     },
                     "Has data?": {
                         "Type": "Choice",
+                        "Default": "No data found",
                         "Choices": [
                             {
-                                "Variable": "$.NumberOfRows",
-                                "NumericGreaterThan": 0,
-                                "Next": "Format record"
+                                "Next": "Format record",
+                                "Condition": "{% $states.input.NumberOfRows > 0 %}"
                             }
-                        ],
-                        "Default": "No data found"
+                        ]
                     },
                     "No data found": {
                         "Type": "Pass",
@@ -93,10 +102,6 @@
                     "Format record": {
                         "Type": "Task",
                         "Resource": "arn:aws:states:::lambda:invoke",
-                        "Parameters": {
-                            "Payload.$": "$",
-                            "FunctionName": "${FORMAT_RECORD_FUNCTION}"
-                        },
                         "Retry": [
                             {
                                 "ErrorEquals": [
@@ -110,44 +115,29 @@
                                 "BackoffRate": 2
                             }
                         ],
-                        "ResultPath": "$.record",
-                        "Next": "Get prompt"
+                        "Next": "Get prompt",
+                        "Arguments": {
+                            "Payload": "{% $states.input %}",
+                            "FunctionName": "${FORMAT_RECORD_FUNCTION}"
+                        },
+                        "Assign": {
+                            "Report": "{% $parse($states.result.Payload).report %}"
+                        }
                     },
                     "Get prompt": {
                         "Type": "Task",
-                        "Parameters": {
+                        "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+                        "Next": "Call generative AI",
+                        "Arguments": {
                             "Name": "${PROMPT_TEMPLATE_PARAMETER_NAME}"
                         },
-                        "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
-                        "ResultPath": "$.prompt",
-                        "Next": "Call generative AI"
+                        "Output": {
+                            "Prompt": "{% $states.result.Parameter.Value %}"
+                        }
                     },
                     "Call generative AI": {
                         "Type": "Task",
                         "Resource": "arn:aws:states:::bedrock:invokeModel",
-                        "Parameters": {
-                            "ModelId": "${BEDROCK_MODEL_ID}",
-                            "Body": {
-                                "anthropic_version": "bedrock-2023-05-31",
-                                "max_tokens": 512,
-                                "messages": [
-                                    {
-                                        "role": "user",
-                                        "content": [
-                                            {
-                                                "type": "text",
-                                                "text.$": "States.Format($.prompt.Parameter.Value, $.record.Payload)"
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        },
-                        "ResultSelector": {
-                            "recordId.$": "$$.Execution.Input.RecordId",
-                            "updatedTime.$": "$$.State.EnteredTime",
-                            "modelResponse.$": "$.Body"
-                        },
                         "Retry": [
                             {
                                 "ErrorEquals": [
@@ -162,15 +152,34 @@
                                 "JitterStrategy": "FULL"
                             }
                         ],
-                        "Next": "Process generative AI output"
+                        "Next": "Process generative AI output",
+                        "Arguments": {
+                            "ModelId": "${BEDROCK_MODEL_ID}",
+                            "Body": {
+                                "anthropic_version": "bedrock-2023-05-31",
+                                "max_tokens": 512,
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {
+                                                "type": "text",
+                                                "text": "{% $replace($states.input.Prompt, '{}', $Report) %}"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        },
+                        "Output": {
+                            "recordId": "{% $RecordId %}",
+                            "updatedTime": "{% $states.context.Execution.StartTime %}",
+                            "modelResponse": "{% $states.result.Body %}"
+                        }
                     },
                     "Process generative AI output": {
                         "Type": "Task",
                         "Resource": "arn:aws:states:::lambda:invoke",
-                        "Parameters": {
-                            "Payload.$": "$",
-                            "FunctionName": "${PROCESS_GEN_AI_OUTPUT_FUNCTION}"
-                        },
                         "Retry": [
                             {
                                 "ErrorEquals": [
@@ -184,57 +193,57 @@
                                 "BackoffRate": 2
                             }
                         ],
-                        "OutputPath": "$.Payload",
-                        "Next": "Save results"
+                        "Next": "Save results",
+                        "Arguments": {
+                            "Payload": "{% $states.input %}",
+                            "FunctionName": "${PROCESS_GEN_AI_OUTPUT_FUNCTION}"
+                        },
+                        "Output": {
+                            "Item": "{% $states.result.Payload %}"
+                        }
                     },
                     "Save results": {
                         "Type": "Task",
                         "Resource": "arn:aws:states:::dynamodb:putItem",
-                        "Parameters": {
+                        "End": true,
+                        "Arguments": {
                             "TableName": "${RESULTS_TABLE_NAME}",
-                            "Item.$": "$"
-                        },
-                        "End": true
+                            "Item": "{% $states.input.Item %}"
+                        }
                     }
                 }
             },
             "Next": "Has more results?",
             "Label": "Processeachrecord",
             "MaxConcurrency": 10,
-            "ResultPath": null,
-            "ItemsPath": "$.QueryResult.Rows",
+            "Items": "{% $states.input.Rows %}",
             "ItemSelector": {
-                "RecordId.$": "$$.Map.Item.Value.Data[0].VarCharValue",
-                "WorkGroup.$": "$.Parameters.WorkGroup",
-                "Database.$": "$.Parameters.Database",
-                "GetRecordQuery.$": "$.Parameters.GetRecordQuery"
+                "AthenaParameters": "{% $AthenaParameters %}",
+                "Record": "{% $states.context.Map.Item.Value.Data[0].VarCharValue %}"
             }
         },
         "Has more results?": {
             "Type": "Choice",
+            "Default": "Success",
             "Choices": [
                 {
-                    "Variable": "$.QueryResult.Response.NextToken",
-                    "IsPresent": true,
                     "Next": "Get record Ids with NextToken",
-                    "Comment": "has NextToken"
+                    "Condition": "{% $exists($states.input.QueryResult.Response.NextToken) %}"
                 }
-            ],
-            "Default": "Success"
+            ]
         },
         "Get record Ids with NextToken": {
             "Type": "Task",
             "Resource": "arn:aws:states:::athena:getQueryResults",
-            "Parameters": {
-                "MaxResults.$": "$.Parameters.MaxResultsPerRequest",
-                "NextToken.$": "$.QueryResult.Response.NextToken",
-                "QueryExecutionId.$": "$.Output.QueryExecution.QueryExecutionId"
-            },
-            "ResultPath": "$.QueryResult",
             "Next": "Process each record",
-            "ResultSelector": {
-                "Rows.$": "$.ResultSet.Rows",
-                "Response.$": "$"
+            "Arguments": {
+                "MaxResults": "{% $AthenaParameters.MaxResultsPerRequest %}",
+                "NextToken": "{% $states.input.QueryResult.Response.NextToken %}",
+                "QueryExecutionId": "{% $states.input.Output.QueryExecution.QueryExecutionId %}"
+            },
+            "Output": {
+                "Rows": "{% $states.result.ResultSet.Rows %}",
+                "Response": "{% $states.result %}"
             }
         },
         "Success": {

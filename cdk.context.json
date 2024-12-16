@@ -10,8 +10,8 @@
         "Database": "healthlake",
         "WorkGroup": "genai-workflow-orchestrator",
         "MaxResultsPerRequest": 100,
-        "GetRecordIdsQuery": "SELECT DISTINCT id FROM documentreference WHERE meta.lastUpdated > \\'{}\\' limit 5;",
-        "GetRecordQuery": "SELECT from_utf8(from_base64(content[1].attachment.data)) as report FROM documentreference WHERE id = \\'{}\\';"
+        "GetRecordIdsQuery": "SELECT DISTINCT id FROM documentreference WHERE meta.lastUpdated > '{}' limit 2;",
+        "GetRecordQuery": "SELECT from_utf8(from_base64(content[1].attachment.data)) as report FROM documentreference WHERE id = '{}';"
     },
     "prompt_template_parameter_name": "/genai-workflow-orchestrator/prompt-template",
     "bedrock_model_id": "arn:aws:bedrock:<REGION>::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0",
