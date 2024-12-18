@@ -42,7 +42,11 @@
                 "QueryExecutionId": "{% $states.input.QueryExecutionId %}"
             },
             "Output": {
-                "Rows": "{% $states.result.ResultSet.Rows %}"
+                "Rows": "{% [$states.result.ResultSet.Rows#$i[$i>0]] %}"
+            },
+            "Assign": {
+                "QueryExecutionId": "{% $states.input.QueryExecutionId %}",
+                "NextToken": "{% $states.result.NextToken ? $states.result.NextToken : '' %}"
             }
         },
         "Has results?": {
@@ -51,10 +55,7 @@
                 {
                     "Next": "Process each record",
                     "Comment": "Results found",
-                    "Output": {
-                        "Rows": "{% $count($states.input.Rows) > 2 ? $states.input.Rows#$i[$i>0] : [$states.input.Rows[1]] %}"
-                    },
-                    "Condition": "{% $count($states.input.Rows) > 1 %}"
+                    "Condition": "{% $count($states.input.Rows) > 0 %}"
                 }
             ],
             "Default": "Success",
@@ -243,22 +244,24 @@
             "Choices": [
                 {
                     "Next": "Get record Ids with NextToken",
-                    "Condition": "{% $exists($states.input.QueryResult.Response.NextToken) %}"
+                    "Condition": "{% $boolean($NextToken) %}"
                 }
             ]
         },
         "Get record Ids with NextToken": {
             "Type": "Task",
             "Resource": "arn:aws:states:::athena:getQueryResults",
-            "Next": "Process each record",
+            "Next": "Has results?",
             "Arguments": {
                 "MaxResults": "{% $AthenaParameters.MaxResultsPerRequest %}",
-                "NextToken": "{% $states.input.QueryResult.Response.NextToken %}",
-                "QueryExecutionId": "{% $states.input.Output.QueryExecution.QueryExecutionId %}"
+                "NextToken": "{% $NextToken %}",
+                "QueryExecutionId": "{% $QueryExecutionId %}"
             },
             "Output": {
-                "Rows": "{% $states.result.ResultSet.Rows %}",
-                "Response": "{% $states.result %}"
+                "Rows": "{% $states.result.ResultSet.Rows %}"
+            },
+            "Assign": {
+                "NextToken": "{% $states.result.NextToken ? $states.result.NextToken : '' %}"
             }
         },
         "Success": {
