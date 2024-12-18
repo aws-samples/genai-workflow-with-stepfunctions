@@ -196,7 +196,7 @@ class GenAIWorkflowOrchestratorStack(Stack):
         format_record = lambda_.Function(
             self,
             "FormatRecord",
-            runtime=lambda_.Runtime.PYTHON_3_12,
+            runtime=lambda_.Runtime.PYTHON_3_13,
             code=lambda_.Code.from_asset("lambda/format_record"),
             handler="format_record.lambda_handler",
             timeout=Duration.seconds(60),
@@ -208,7 +208,7 @@ class GenAIWorkflowOrchestratorStack(Stack):
         process_gen_ai_output = lambda_.Function(
             self,
             "ProcessGenAIOutput",
-            runtime=lambda_.Runtime.PYTHON_3_12,
+            runtime=lambda_.Runtime.PYTHON_3_13,
             code=lambda_.Code.from_asset("lambda/process_gen_ai_output"),
             handler="process_gen_ai_output.lambda_handler",
             timeout=Duration.seconds(60),
@@ -515,7 +515,7 @@ class GenAIWorkflowOrchestratorStack(Stack):
         lambda_add_lf_data_lake_admin = lambda_.Function(
             self,
             "AddLakeFormationDataLakeAdmin",
-            runtime=lambda_.Runtime.PYTHON_3_12,
+            runtime=lambda_.Runtime.PYTHON_3_13,
             code=lambda_.Code.from_inline('''
 #
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
@@ -793,6 +793,10 @@ def lambda_handler(event, context):  # pylint: disable=unused-argument
         NagSuppressions.add_stack_suppressions(
             self,
             [
+                {
+                    "id": "AwsSolutions-L1",
+                    "reason": "Latest runtime version not required for this application",
+                },
                 {
                     "id": "AwsSolutions-IAM4",
                     "reason": "Lambda execution policy for custom resources created by CDK",
